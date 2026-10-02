@@ -54,6 +54,12 @@ function toTimestampMs(value: string | undefined): number {
 }
 
 function compareTimelineItems(a: TimelineItem, b: TimelineItem): number {
+  // Messages must always preserve insertion order to prevent
+  // timestamp-based reordering when browser and server clocks are out of sync.
+  if (a.type === 'message' && b.type === 'message') {
+    return a.sourceIndex - b.sourceIndex;
+  }
+  // For interleaving tool executions with messages, use timestamp-based sorting.
   const aTsValid = Number.isFinite(a.timestampMs);
   const bTsValid = Number.isFinite(b.timestampMs);
   if (aTsValid && bTsValid && a.timestampMs !== b.timestampMs) {

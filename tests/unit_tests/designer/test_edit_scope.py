@@ -85,3 +85,30 @@ def test_english_background_collection_keeps_its_color() -> None:
     restored = restore_graph_attribute_scope(before, after, message)
     prompt = restored["nodes"][0]["config"]["prompt"]
     assert prompt == "one red bicycle and several parked white bicycles"
+
+
+def test_verb_glued_to_the_named_cup_still_changes() -> None:
+    before = _graph("倒入一只白色陶瓷杯。磨豆机与倒扣白杯。")
+    before["description"] = "店员在吧台将咖啡倒入白色陶瓷杯。"
+    after = _graph("倒入一只红色陶瓷杯。磨豆机与倒扣红杯。")
+    after["description"] = "店员在吧台将咖啡倒入红色陶瓷杯。"
+    restored = restore_graph_attribute_scope(before, after, _MESSAGE)
+    assert restored["description"] == "店员在吧台将咖啡倒入红色陶瓷杯。"
+    prompt = restored["nodes"][0]["config"]["prompt"]
+    assert "一只红色陶瓷杯" in prompt
+    assert "倒扣白杯" in prompt
+
+
+def test_unrequested_duration_change_is_rolled_back() -> None:
+    before = _graph("倒入一只白色陶瓷杯。每镜5秒。磨豆机与倒扣白杯。")
+    after = _graph("倒入一只红色陶瓷杯。每镜8秒。磨豆机与倒扣红杯。")
+    restored = restore_graph_attribute_scope(before, after, _MESSAGE)
+    prompt = restored["nodes"][0]["config"]["prompt"]
+    assert prompt == "倒入一只红色陶瓷杯。每镜5秒。磨豆机与倒扣白杯。"
+
+
+def test_full_rewrite_is_left_to_the_model() -> None:
+    message = "把白天街景改成霓虹夜景，整段重写这一镜的提示词。"
+    before = _graph("白天街景，倒扣白杯")
+    after = _graph("霓虹夜景，倒扣红杯")
+    assert restore_graph_attribute_scope(before, after, message) is after

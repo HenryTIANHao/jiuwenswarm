@@ -192,23 +192,36 @@ def _finish(before: str, after: str, spec: _Spec) -> str:
         return after
     if not before:
         return _sweep(after, spec)
-    return _sweep(_reconcile(before, after, spec), spec)
+    text, spans = _reconcile(before, after, spec)
+    return _sweep(text, spec, spans)
 
 
-def _reconcile(before: str, after: str, spec: _Spec) -> str:
+def _reconcile(before: str, after: str, spec: _Spec) -> tuple[str, list[tuple[int, int]]]:
+    """Return the aligned text and the ranges that still come from the model."""
     parts: list[str] = []
+    spans: list[tuple[int, int]] = []
+    cursor = 0
     for tag, i1, i2, j1, j2 in _char_opcodes(before, after):
+        changed = False
         if tag == "equal":
-            parts.append(before[i1:i2])
+            piece = before[i1:i2]
         elif tag == "insert":
             inserted = after[j1:j2]
             if _keep_insert(before, i1, inserted, spec):
-                parts.append(inserted)
+                piece = inserted
+                changed = True
+            else:
+                piece = ""
         elif _keep_change(before, i1, i2, after, j1, j2, spec):
-            parts.append(after[j1:j2])
+            piece = after[j1:j2]
+            changed = True
         else:
-            parts.append(before[i1:i2])
-    return "".join(parts)
+            piece = before[i1:i2]
+        if changed and piece:
+            spans.append((cursor, cursor + len(piece)))
+        parts.append(piece)
+        cursor += len(piece)
+    return "".join(parts), spans
 
 
 def _keep_change(before: str, i1: int, i2: int, after: str, j1: int, j2: int, spec: _Spec) -> bool:
@@ -227,19 +240,40 @@ def _keep_insert(before: str, at: int, inserted: str, spec: _Spec) -> bool:
     return not _foreign_left(before, at, spec)
 
 
-def _sweep(text: str, spec: _Spec) -> str:
+def _sweep(text: str, spec: _Spec, spans: list[tuple[int, int]] | None = None) -> str:
+    """Roll a modifier plus the new wording back to the old wording.
+
+    ``spans`` are the ranges the model actually changed. A modifier that was
+    already next to the new wording in the original text is left alone.
+    """
     if not spec.qualifiers or not spec.source or not spec.dest:
         return text
+    if spans is not None and not spans:
+        return text
+    replacements: list[tuple[int, int, str]] = []
     for qualifier in spec.qualifiers:
         if spec.source.isascii():
             pattern = re.compile(
                 rf"\b{re.escape(qualifier)}\s+{re.escape(spec.dest)}\b",
                 re.I,
             )
-            text = pattern.sub(f"{qualifier} {spec.source}", text)
         else:
             pattern = re.compile(rf"{re.escape(qualifier)}(的?){re.escape(spec.dest)}")
-            text = pattern.sub(lambda match, qual=qualifier: qual + match.group(1) + spec.source, text)
+        for match in pattern.finditer(text):
+            dest_at = match.end() - len(spec.dest)
+            if spans is not None and not _overlaps(dest_at, match.end(), spans):
+                continue
+            if spec.source.isascii():
+                piece = f"{qualifier} {spec.source}"
+            else:
+                piece = qualifier + match.group(1) + spec.source
+            replacements.append((match.start(), match.end(), piece))
+    occupied = len(text) + 1
+    for start, end, piece in sorted(replacements, reverse=True):
+        if end > occupied:
+            continue
+        text = text[:start] + piece + text[end:]
+        occupied = start
     return text
 
 
@@ -290,6 +324,10 @@ def _sweep_value(value: Any, spec: _Spec) -> Any:
     if isinstance(value, list):
         return [_sweep_value(item, spec) for item in value]
     return value
+
+
+def _overlaps(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < span_end and span_start < end for span_start, span_end in spans)
 
 
 def _foreign_left(text: str, index: int, spec: _Spec) -> bool:

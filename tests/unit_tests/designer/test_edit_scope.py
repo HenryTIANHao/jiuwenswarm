@@ -107,6 +107,23 @@ def test_unrequested_duration_change_is_rolled_back() -> None:
     assert prompt == "倒入一只红色陶瓷杯。每镜5秒。磨豆机与倒扣白杯。"
 
 
+def test_existing_qualified_phrase_keeps_the_new_color() -> None:
+    before = _graph("倒扣白杯。面板上有倒扣红色按钮。一只白色陶瓷杯。")
+    after = _graph("倒扣红杯。面板上有倒扣红色按钮。一只红色陶瓷杯。另外倒扣红杯。")
+    restored = restore_graph_attribute_scope(before, after, _MESSAGE)
+    prompt = restored["nodes"][0]["config"]["prompt"]
+    assert prompt == "倒扣白杯。面板上有倒扣红色按钮。一只红色陶瓷杯。另外倒扣白杯。"
+
+
+def test_existing_english_qualified_phrase_keeps_the_new_color() -> None:
+    message = "Change the white bicycle to red. Keep the camera."
+    before = _graph("parked red signs and one white bicycle and several parked white bicycles")
+    after = _graph("parked red signs and one red bicycle and several parked red bicycles")
+    restored = restore_graph_attribute_scope(before, after, message)
+    prompt = restored["nodes"][0]["config"]["prompt"]
+    assert prompt == "parked red signs and one red bicycle and several parked white bicycles"
+
+
 def test_full_rewrite_is_left_to_the_model() -> None:
     message = "把白天街景改成霓虹夜景，整段重写这一镜的提示词。"
     before = _graph("白天街景，倒扣白杯")

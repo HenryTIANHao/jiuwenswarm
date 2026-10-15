@@ -60,6 +60,10 @@ _STAGE_BY_KIND = {
     "video": "calling video model",
 }
 
+#: Text is one cheap chat call; image/video generations are paid and are
+#: never repeated by the tool.
+_GENERATE_ATTEMPTS_BY_KIND = {"text": 2}
+
 
 class _ToolError(Exception):
     def __init__(self, code: str) -> None:
@@ -117,6 +121,20 @@ def _output_kind(node: dict[str, Any]) -> str:
     from jiuwenswarm.common.schema.designer_graph import node_agent_template
 
     return MEMBER_OUTPUT_KIND.get(node_agent_template(node), "text")
+
+
+def _note_member_error(
+    env: dict[str, Any], node_id: str, error: str | None, *, keep_existing: bool = False
+) -> None:
+    bridge = env.get("bridge")
+    note = getattr(bridge, "note_member_error", None)
+    if not callable(note):
+        return
+    if keep_existing:
+        existing = getattr(bridge, "member_error_for", None)
+        if callable(existing) and existing(node_id):
+            return
+    note(node_id, error)
 
 
 def _same_file(left: str, right: str) -> bool:
@@ -327,7 +345,7 @@ async def generate_node_output(
     setting: str = "",
     duration_seconds: float | None = None,
 ) -> dict[str, Any]:
-    """Run the node's handler once with the member's prompt."""
+    """Run the node's handler with the member's prompt; text gets one retry."""
     kind = MEMBER_OUTPUT_KIND.get(member, "text")
     uri_key = _URI_KEY_BY_KIND[kind]
 
@@ -352,13 +370,28 @@ async def generate_node_output(
     injected: dict[str, Any] = {"prompt": focused}
     if duration_seconds is not None and duration_seconds > 0:
         injected["duration_sec"] = int(round(duration_seconds))
-    try:
-        result, sent_prompt = await _run_handler(env, node, injected, kind)
-    except Exception as exc:  # noqa: BLE001 — a failed generation is an answer
-        logger.warning(
-            "[design-tools] generate failed: node=%s member=%s err=%s", node_id, member, exc
-        )
-        return failure(f"generation_failed: {exc}")
+    attempts = _GENERATE_ATTEMPTS_BY_KIND.get(kind, 1)
+    result: Any = None
+    sent_prompt = ""
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            result, sent_prompt = await _run_handler(env, node, injected, kind)
+            break
+        except Exception as exc:  # noqa: BLE001 — a failed generation is an answer
+            last_error = exc
+            logger.warning(
+                "[design-tools] generate failed: node=%s member=%s attempt=%d/%d err=%s",
+                node_id,
+                member,
+                attempt,
+                attempts,
+                exc,
+            )
+    if result is None:
+        _note_member_error(env, node_id, f"{member} generation failed: {last_error}")
+        return failure(f"generation_failed: {last_error}")
+    _note_member_error(env, node_id, None)
     env["generations"][node_id] = result
     primary = result.output_ref or {}
     return {
@@ -452,6 +485,32 @@ async def submit_node_output(
     except _ToolError as exc:
         return rejected(exc.code)
     node_id = str(node.get("id") or "")
+    result = _submit(env, node, node_id, uri=uri, extra_uris=extra_uris, text=text, label=label)
+    if result.get("success"):
+        _note_member_error(env, node_id, None)
+    else:
+        _note_member_error(
+            env,
+            node_id,
+            f"submit_node_output rejected: {result.get('error')}",
+            keep_existing=True,
+        )
+    return result
+
+
+def _submit(
+    env: dict[str, Any],
+    node: dict[str, Any],
+    node_id: str,
+    *,
+    uri: str | None,
+    extra_uris: list[str] | None,
+    text: str,
+    label: str,
+) -> dict[str, Any]:
+    def rejected(error: str) -> dict[str, Any]:
+        return {"success": False, "status": "rejected", "output_ref": None, "error": error}
+
     generated = env["generations"].get(node_id)
     if generated is None:
         return rejected("not_generated")

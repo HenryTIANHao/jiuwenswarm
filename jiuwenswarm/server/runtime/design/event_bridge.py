@@ -68,6 +68,9 @@ class DesignEventBridge:
         # This trigger's node results, keyed by node id (the media guarantee
         # builds a member's receipt from it).
         self._produced: dict[str, dict[str, Any]] = {}
+        # Last member-tool failure per node. The worker's own end-of-turn
+        # error only says no receipt arrived; this keeps the cause.
+        self._member_errors: dict[str, str] = {}
 
     @property
     def single(self) -> bool:
@@ -113,6 +116,17 @@ class DesignEventBridge:
         """The result a node wrote during THIS trigger, or None."""
         produced = self._produced.get(node_id)
         return dict(produced) if produced is not None else None
+
+    def note_member_error(self, node_id: str, error: str | None) -> None:
+        """Record a member tool's failure for a node; ``None`` clears it."""
+        if error:
+            self._member_errors[node_id] = str(error)[:2000]
+        else:
+            self._member_errors.pop(node_id, None)
+
+    def member_error_for(self, node_id: str) -> str | None:
+        """The last member-tool failure recorded for a node during THIS trigger."""
+        return self._member_errors.get(node_id)
 
     # ------------------------------------------------------------------
     # engine progress events

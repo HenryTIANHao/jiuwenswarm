@@ -89,7 +89,10 @@ class MediaGuaranteeBackend:
             receipt = self._receipt(node_id)
             if receipt is not None:
                 return receipt
-            self._bridge.mark_node_failed(node_id, str(exc) or "member worker failed")
+            self._bridge.mark_node_failed(
+                node_id,
+                self._member_error(node_id) or str(exc) or "member worker failed",
+            )
             return AgentResult(text=None, skipped=True)
         try:
             await self._enforce(opts, result, member_call=member_call)
@@ -109,6 +112,10 @@ class MediaGuaranteeBackend:
         if produced.get("output_refs"):
             receipt["output_refs"] = produced["output_refs"]
         return AgentResult(text=str(produced.get("text") or ""), structured=receipt)
+
+    def _member_error(self, node_id: str) -> str | None:
+        lookup = getattr(self._bridge, "member_error_for", None)
+        return lookup(node_id) if callable(lookup) else None
 
     # ------------------------------------------------------------------
     # the old host guarantees (node_agent post-turn block, 52469f4c)
@@ -180,7 +187,10 @@ class MediaGuaranteeBackend:
         # message is a receipt, not the brief / storyboard.
         if member_call:
             if agent_result.output_ref is None:
-                message = f"node {node_id} finished without submit_node_output"
+                message = (
+                    self._member_error(node_id)
+                    or f"node {node_id} finished without submit_node_output"
+                )
                 logger.warning("[design-guarantee] %s", message)
                 self._bridge.mark_node_failed(node_id, message)
                 raise _MediaGuaranteeDeclined()

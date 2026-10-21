@@ -17,8 +17,8 @@ const DESIGNER_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;
 const DESIGNER_VIDEO_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 export function isDesignerUploadTooLarge(file: Pick<File, 'size' | 'type'>): boolean {
-  const limit = file.type.toLowerCase().startsWith('video/') ? DESIGNER_VIDEO_UPLOAD_MAX_BYTES : DESIGNER_UPLOAD_MAX_BYTES;
-  return file.size > limit;
+  const isVideo = file.type.toLowerCase().startsWith('video/');
+  return file.size > (isVideo ? DESIGNER_VIDEO_UPLOAD_MAX_BYTES : DESIGNER_UPLOAD_MAX_BYTES);
 }
 
 export function uploadKindFromMime(mime: string | null | undefined): DesignerUploadKind | null {

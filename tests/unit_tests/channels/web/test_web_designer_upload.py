@@ -21,12 +21,9 @@ class _UploadHandlerHarness(_SpaStaticHandler):
 
     def __init__(self, *, workspace_root: Path, path: str, headers: dict[str, str], body: bytes) -> None:
         self.workspace_root = workspace_root
-        self.project_root = workspace_root
-        self.command = "POST"
         self.path = path
         self.headers = headers
         self.rfile = io.BytesIO(body)
-        self.wfile = io.BytesIO()
         self.logger = logging.getLogger("test-web-designer-upload")
         self.sent: list[tuple[int, dict | None]] = []
 
@@ -51,7 +48,13 @@ def _upload(tmp_path: Path, body: bytes, *, length: int | None = None) -> tuple[
     )
 
 
-def _post(tmp_path: Path, body: bytes, *, path: str = "/file-api/upload", multipart: bool = True) -> _UploadHandlerHarness:
+def _post(
+    tmp_path: Path,
+    body: bytes,
+    *,
+    path: str = "/file-api/upload",
+    multipart: bool = True,
+) -> _UploadHandlerHarness:
     content_type = f"multipart/form-data; boundary={_BOUNDARY}" if multipart else "application/octet-stream"
     handler = _UploadHandlerHarness(
         workspace_root=tmp_path,
@@ -146,7 +149,7 @@ def test_video_over_its_limit_is_rejected_and_removed(tmp_path: Path, monkeypatc
     assert status == 413
     assert payload is not None and payload["error"] == "file_too_large"
     assert handler.rfile.read() == b""
-    assert list((tmp_path / "uploads" / "designer").iterdir()) == []
+    assert not any((tmp_path / "uploads" / "designer").iterdir())
 
 
 def test_agentos_routing_rejects_local_designer_upload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,7 +182,7 @@ def test_truncated_body_is_rejected_and_removed(tmp_path: Path) -> None:
 
     assert status == 400
     assert payload["error"] == "missing_file"
-    assert list((tmp_path / "uploads" / "designer").iterdir()) == []
+    assert not any((tmp_path / "uploads" / "designer").iterdir())
 
 
 def test_unsafe_filename_is_sanitized(tmp_path: Path) -> None:

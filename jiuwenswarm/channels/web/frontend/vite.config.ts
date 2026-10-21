@@ -1545,12 +1545,14 @@ function devFileContentApi(): Plugin {
         req.on('end', () => {
           try {
             const body = Buffer.concat(chunks)
-            const parts = body.length <= DESIGNER_UPLOAD_REQUEST_MAX_BYTES && contentType.includes('multipart/form-data')
+            const requestTooLarge = body.length > DESIGNER_UPLOAD_REQUEST_MAX_BYTES
+            const parts = !requestTooLarge && contentType.includes('multipart/form-data')
               ? parseMultipartFiles(contentType, body)
               : []
-            const tooLarge = body.length > DESIGNER_UPLOAD_REQUEST_MAX_BYTES || parts.some((part) => (
-              part.data.length > (part.mimeType.startsWith('video/') ? DESIGNER_VIDEO_UPLOAD_MAX_BYTES : DESIGNER_UPLOAD_MAX_BYTES)
-            ))
+            const partLimit = (part: MultipartFilePart) => (
+              part.mimeType.startsWith('video/') ? DESIGNER_VIDEO_UPLOAD_MAX_BYTES : DESIGNER_UPLOAD_MAX_BYTES
+            )
+            const tooLarge = requestTooLarge || parts.some((part) => part.data.length > partLimit(part))
             if (tooLarge) {
               res.statusCode = 413
               res.setHeader('content-type', 'application/json; charset=utf-8')

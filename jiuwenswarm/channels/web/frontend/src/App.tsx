@@ -634,6 +634,7 @@ function AppContent({
   const historyRestoreFromPanelHintRef = useRef(false);
   const { loadProjects, setSelectedProject } = useWorkspaceStore();
   const workspaceWorkMode = useWorkspaceStore((state) => state.workMode);
+  const designCanvasOpen = workspaceWorkMode === 'design' && route.kind === 'design-project';
 
   const setHistoryRetryAvailable = useCallback((sid: string, available: boolean) => {
     setHistoryRetrySessions((current) => {
@@ -4240,6 +4241,7 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                 onSelect={requestSessionNavigation}
                 onSelectDesignSession={handleSelectDesignSession}
                 activeDesignSessionId={route.kind === 'design-project' ? route.sessionId : undefined}
+                designCanvasOpen={activeNav !== 'cron' && designCanvasOpen}
                 onProjectRemoved={handleProjectRemoved}
                 onOpenCron={() => handleNavigate('cron')}
                 isCronActive={activeNav === 'cron'}
@@ -4269,14 +4271,13 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                 onSelect={requestSessionNavigation}
                 onSelectDesignSession={handleSelectDesignSession}
                 activeDesignSessionId={route.kind === 'design-project' ? route.sessionId : undefined}
+                designCanvasOpen={designCanvasOpen}
                 onProjectRemoved={handleProjectRemoved}
                 onOpenCron={() => handleNavigate('cron')}
                 isCronActive={false}
                 collapsed={conversationSidebarCollapsed}
                 onToggleCollapse={() => { closeSidebarPeek(); setSecondarySidebarCollapsed(true); }}
-                hideCollapseButton={
-                  workspaceWorkMode === 'design' && route.kind === 'design-project'
-                }
+                hideCollapseButton={designCanvasOpen}
               />
               {workspaceWorkMode === 'design' && route.kind === 'design-project' ? (
                   <DesignerPage

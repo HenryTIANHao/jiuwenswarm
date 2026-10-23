@@ -68,6 +68,19 @@ def test_new_id_wired_mid_chain_keeps_its_suffix_number() -> None:
     ]
 
 
+def test_clip_index_beyond_the_clip_count_is_named() -> None:
+    graph = _graph(
+        _clip("n_clip_1", 1),
+        _clip("n_clip_2", 2),
+        _clip("n_clip_x", 10),
+    )
+
+    assert clip_order_problems(graph) == [
+        "clip_index skips 3 (expected 1..3)",
+        "n_clip_x has clip_index 10 outside 1..3",
+    ]
+
+
 def test_renumbered_insert_has_no_problems() -> None:
     graph = _graph(
         _clip("n_clip_1", 1),

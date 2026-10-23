@@ -951,6 +951,9 @@ def clip_order_problems(graph: DesignerExecutionGraph) -> list[str]:
             f"(expected 1..{len(index_by_id)})"
         )
     for node_id, index in index_by_id.items():
+        if not 1 <= index <= len(index_by_id):
+            problems.append(f"{node_id} has clip_index {index} outside 1..{len(index_by_id)}")
+    for node_id, index in index_by_id.items():
         previous = [
             source for source in video_concat_source_ids(graph, node_id) if source in index_by_id
         ]

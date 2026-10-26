@@ -102,6 +102,8 @@
       "notImplemented": "Not implemented",
       "send": "Send",
       "running": "The design leader is working…",
+      "stop": "Stop",
+      "stopError": "Could not stop. Please try again.",
       "attach": "Add reference media",
       "removeAttachment": "Remove reference",
       "attachHint": "Images, video, or audio. Up to 5 images, 1 video, and 1 audio file.",

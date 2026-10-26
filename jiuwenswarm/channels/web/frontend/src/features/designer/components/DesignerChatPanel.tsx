@@ -19,6 +19,7 @@ import {
   sendDesignerLeaderMessage,
 } from '../designerEntry';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
+import { useDesignerRunStore } from '../designerRunStore';
 import { useDesignerStore } from '../designerStore';
 import { useDesignerUiStore } from '../designerUiStore';
 import {
@@ -116,6 +117,7 @@ export function DesignerChatPanel() {
   const [attachments, setAttachments] = useState<ComposerDraft[]>([]);
   const [attachError, setAttachError] = useState('');
   const [sending, setSending] = useState(false);
+  const stopRequestedRef = useRef(false);
   // The canvas owns exactly one session: read and write the model against that
   // session id. `activeSessionId` follows the app route and can point at
   // another conversation while this panel stays mounted (#5394, #8995).
@@ -157,6 +159,12 @@ export function DesignerChatPanel() {
   useEffect(() => {
     if (sessionId) bindDesignerChatSession(sessionId);
   }, [sessionId]);
+
+  useEffect(() => {
+    if (isProcessing || !stopRequestedRef.current) return;
+    stopRequestedRef.current = false;
+    useDesignerRunStore.getState().applyLeaderActivity(null);
+  }, [isProcessing]);
 
   const limitError = useCallback(
     (kind: DesignerReferenceKind) => {
@@ -261,10 +269,20 @@ export function DesignerChatPanel() {
   const handleStop = useCallback(() => {
     if (!sessionId) return;
     setAttachError('');
-    void webClient
-      .request('chat.interrupt', { session_id: sessionId, intent: 'pause', mode: DESIGNER_TEAM_MODE })
-      .catch(() => setAttachError(t('designer.chat.stopError')));
-  }, [sessionId, t]);
+    stopRequestedRef.current = true;
+    const runStore = useDesignerRunStore.getState();
+    const leaderRunActive = runStore.isRunning && runStore.run?.metadata?.trigger_source === 'leader';
+    // Cancel through the engine first: pausing the leader kills its trigger
+    // task outright, skipping the abort that unwinds the run cleanly.
+    void (leaderRunActive ? runStore.cancel(domainGraph) : Promise.resolve())
+      .then(() =>
+        webClient.request('chat.interrupt', { session_id: sessionId, intent: 'pause', mode: DESIGNER_TEAM_MODE }),
+      )
+      .catch(() => {
+        stopRequestedRef.current = false;
+        setAttachError(t('designer.chat.stopError'));
+      });
+  }, [domainGraph, sessionId, t]);
 
   const handleUserAnswer = useCallback(
     async (requestId: string, answers: UserAnswer[], source?: string): Promise<boolean> => {

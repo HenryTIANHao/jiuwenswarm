@@ -1,4 +1,4 @@
-import { PanelRight, X } from 'lucide-react';
+import { PanelRight, Square, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import SendPlaneIcon from '../../../assets/send_plane.svg?react';
@@ -258,6 +258,14 @@ export function DesignerChatPanel() {
       });
   }, [attachments, chatBusy, domainGraph, draft, sessionId, t]);
 
+  const handleStop = useCallback(() => {
+    if (!sessionId) return;
+    setAttachError('');
+    void webClient
+      .request('chat.interrupt', { session_id: sessionId, intent: 'pause', mode: DESIGNER_TEAM_MODE })
+      .catch(() => setAttachError(t('designer.chat.stopError')));
+  }, [sessionId, t]);
+
   const handleUserAnswer = useCallback(
     async (requestId: string, answers: UserAnswer[], source?: string): Promise<boolean> => {
       if (!sessionId) return false;
@@ -371,7 +379,7 @@ export function DesignerChatPanel() {
             className="designer-chat-panel__input"
             placeholder={t('designer.chat.inputPlaceholder')}
             value={draft}
-            disabled={chatBusy}
+            disabled={sending}
             data-testid="designer-chat-panel-input"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
@@ -394,16 +402,29 @@ export function DesignerChatPanel() {
                 stop: t('chat.taskFullDuplexStop'),
               }}
               fallback={
-                <button
-                  type="button"
-                  className="designer-chat-panel__send"
-                  disabled={chatBusy || !canSend}
-                  onClick={handleSend}
-                  aria-label={t('designer.chat.send')}
-                  data-testid="designer-chat-panel-send"
-                >
-                  <SendPlaneIcon className="designer-chat-panel__send-icon" aria-hidden />
-                </button>
+                isProcessing ? (
+                  <button
+                    type="button"
+                    className="designer-chat-panel__send"
+                    onClick={handleStop}
+                    aria-label={t('designer.chat.stop')}
+                    title={t('designer.chat.stop')}
+                    data-testid="designer-chat-panel-stop"
+                  >
+                    <Square className="designer-chat-panel__stop-icon" fill="currentColor" aria-hidden />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="designer-chat-panel__send"
+                    disabled={chatBusy || !canSend}
+                    onClick={handleSend}
+                    aria-label={t('designer.chat.send')}
+                    data-testid="designer-chat-panel-send"
+                  >
+                    <SendPlaneIcon className="designer-chat-panel__send-icon" aria-hidden />
+                  </button>
+                )
               }
             />
           </div>

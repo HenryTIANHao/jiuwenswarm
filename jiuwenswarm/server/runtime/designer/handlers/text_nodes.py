@@ -365,7 +365,10 @@ class StoryboardNodeHandler:
         if not text:
             planned = node_config(node).get("planned_shots")
             if not isinstance(planned, list) or not planned:
-                raise RuntimeError("Storyboard has no planned shots to tabulate.")
+                raise RuntimeError(
+                    "Storyboard has no planned shots because this graph was not built "
+                    "by the Director chain; rebuild the graph."
+                )
             analysis = meta.get("script_analysis") if isinstance(meta.get("script_analysis"), dict) else {}
             characters = [c for c in (analysis.get("characters") or []) if isinstance(c, dict)]
             from jiuwenswarm.server.runtime.designer.pipeline.content_language import (

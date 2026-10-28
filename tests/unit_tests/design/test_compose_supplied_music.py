@@ -137,7 +137,11 @@ def _upload_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return upload
 
 
-def test_uploaded_music_drops_audio_the_clip_never_asked_for(
+def _rewrite_of(calls: list[list[str]], source: Path) -> list[str]:
+    return next(cmd for cmd in calls if "-c:v" in cmd and cmd[cmd.index("-i") + 1] == str(source))
+
+
+def test_uploaded_music_keeps_only_the_dialogue_clips_asked_for(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ffmpeg_calls: list[list[str]]
 ) -> None:
     _upload_audio(monkeypatch, tmp_path)
@@ -149,10 +153,27 @@ def test_uploaded_music_drops_audio_the_clip_never_asked_for(
         _ctx(_graph(), clip1, clip2), [clip1, clip2], scratch
     )
 
-    assert inputs[0].parent == scratch.resolve()
-    assert inputs[1] == clip2
-    strip = next(cmd for cmd in ffmpeg_calls if "-an" in cmd)
-    assert strip[strip.index("-i") + 1] == str(clip1)
+    assert [path.parent for path in inputs] == [scratch.resolve(), scratch.resolve()]
+    assert "-an" in _rewrite_of(ffmpeg_calls, clip1)
+    dialogue = _rewrite_of(ffmpeg_calls, clip2)
+    assert "-an" not in dialogue
+    assert dialogue[dialogue.index("-af") + 1] == "highpass=f=150,lowpass=f=4000"
+
+
+def test_uploaded_music_leaves_wired_user_videos_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ffmpeg_calls: list[list[str]]
+) -> None:
+    _upload_audio(monkeypatch, tmp_path)
+    clip1, clip2 = _clips(tmp_path)
+    upload = tmp_path / "user_video.mp4"
+    upload.write_bytes(b"m" * 600)
+
+    inputs = compose_mod._clips_for_supplied_music(
+        _ctx(_graph(), clip1, clip2), [clip1, clip2, upload.resolve()], tmp_path
+    )
+
+    assert inputs[2] == upload.resolve()
+    assert not any(cmd[cmd.index("-i") + 1] == str(upload.resolve()) for cmd in ffmpeg_calls if "-c:v" in cmd)
 
 
 def test_without_supplied_music_clips_keep_their_audio(
@@ -195,7 +216,7 @@ def test_music_node_output_is_supplied_music(
     )
 
 
-def test_supplied_music_keeps_only_the_speech_band_of_clip_audio(
+def test_overlay_leaves_the_film_audio_unfiltered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ffmpeg_calls: list[list[str]]
 ) -> None:
     _upload_audio(monkeypatch, tmp_path)
@@ -208,5 +229,34 @@ def test_supplied_music_keeps_only_the_speech_band_of_clip_audio(
     )
 
     overlay = next(cmd for cmd in ffmpeg_calls if "[aout]" in cmd)
-    spec = overlay[overlay.index("-filter_complex") + 1]
-    assert "highpass=f=150,lowpass=f=4000" in spec
+    assert "highpass" not in overlay[overlay.index("-filter_complex") + 1]
+
+
+@pytest.mark.asyncio
+async def test_failed_score_falls_back_to_the_clips_own_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ffmpeg_calls: list[list[str]]
+) -> None:
+    _upload_audio(monkeypatch, tmp_path)
+    clip1, clip2 = _clips(tmp_path)
+    graph = _graph()
+    joined: list[list[Path]] = []
+
+    def fake_concat(paths: list[Path], dest: Path) -> Path:
+        joined.append(list(paths))
+        Path(dest).write_bytes(b"m" * 600)
+        return Path(dest).resolve()
+
+    monkeypatch.setattr(compose_mod, "concatenate_clip_videos", fake_concat)
+    monkeypatch.setattr(compose_mod.handler_io, "canvas_output_dir", lambda graph: tmp_path)
+    monkeypatch.setattr(
+        compose_mod, "mix_compose_soundtrack", lambda video, dest, ctx=None, brief="": video
+    )
+
+    result = await compose_mod.ComposeNodeHandler().execute(
+        graph["nodes"][-1], _ctx(graph, clip1, clip2)
+    )
+
+    assert result.output_ref is not None
+    assert len(joined) == 2
+    assert joined[0] != [clip1, clip2]
+    assert joined[1] == [clip1, clip2]

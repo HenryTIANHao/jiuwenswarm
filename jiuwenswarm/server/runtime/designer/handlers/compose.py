@@ -27,6 +27,9 @@ from jiuwenswarm.common.schema.designer_graph import (
     video_concat_source_ids,
 )
 from jiuwenswarm.server.runtime.designer.handlers import common as handler_io
+from jiuwenswarm.server.runtime.designer.handlers.audio_nodes import (
+    is_silent_music_placeholder,
+)
 from jiuwenswarm.server.runtime.designer.handlers.common import role_output_text
 from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext, NodeResult
 
@@ -498,6 +501,88 @@ def _collect_role_audio_paths(ctx: NodeExecutionContext, roles: set[str]) -> lis
     return found
 
 
+def _film_has_supplied_music(ctx: NodeExecutionContext) -> bool:
+    """True when compose scores the film with real music: a wired music node or the user's audio upload."""
+    if any(
+        not is_silent_music_placeholder(path)
+        for path in _collect_role_audio_paths(ctx, {"music", NODE_TYPE_AUDIO})
+    ):
+        return True
+    # Any wired track (speech, or the music placeholder) stops the upload fallback in mix_compose_soundtrack.
+    if _collect_role_audio_paths(ctx, {"speech", "music", NODE_TYPE_AUDIO}):
+        return False
+    from jiuwenswarm.server.runtime.designer.user_references import (
+        user_reference_audio_path,
+    )
+
+    user_audio = user_reference_audio_path(ctx.graph)
+    return user_audio is not None and user_audio.is_file()
+
+
+def _clip_paths_without_requested_audio(ctx: NodeExecutionContext) -> set[Path]:
+    """Clip files whose shot did not ask the video model for dialogue audio."""
+    from jiuwenswarm.server.runtime.designer.audio_locks import (
+        resolve_video_audio_request,
+    )
+
+    graph = ctx.graph if isinstance(ctx.graph, dict) else {}
+    meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    states = (ctx.run or {}).get("node_states") or {}
+    found: set[Path] = set()
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict) or node_pipeline(node) != NODE_ROLE_CLIP:
+            continue
+        cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if resolve_video_audio_request(cfg, meta)[0]:
+            continue
+        state = states.get(str(node.get("id") or ""))
+        path = _video_from_state(state) if isinstance(state, dict) else None
+        if path is not None:
+            found.add(path)
+    return found
+
+
+def _drop_audio(ffmpeg: str, path: Path, dest: Path) -> Path:
+    """Video-only copy of ``path``; ``path`` itself when ffmpeg cannot write it."""
+    stripped = _run_ffmpeg(
+        ffmpeg,
+        ["-y", "-i", str(path.resolve()), "-map", "0:v:0", "-c:v", "copy", "-an", str(dest)],
+    )
+    if stripped.returncode != 0 or not _output_ok(dest):
+        logger.warning(
+            "compose could not drop clip audio: %s",
+            (stripped.stderr or stripped.stdout or "")[:800],
+        )
+        dest.unlink(missing_ok=True)
+        return path
+    return dest.resolve()
+
+
+def _clips_for_supplied_music(
+    ctx: NodeExecutionContext, paths: list[Path], scratch: Path
+) -> list[Path]:
+    """Under a supplied score, a clip only keeps audio it asked for (dialogue).
+
+    Video models add their own music to clips that never requested audio (MiniMax
+    always returns audio), which would otherwise play on top of the user's track.
+    """
+    if not _film_has_supplied_music(ctx):
+        return paths
+    muted = _clip_paths_without_requested_audio(ctx)
+    if not muted:
+        return paths
+    try:
+        ffmpeg = _find_ffmpeg()
+    except RuntimeError:
+        return paths
+    inputs: list[Path] = []
+    for index, path in enumerate(paths):
+        if path in muted and _probe_has_audio(ffmpeg, path):
+            path = _drop_audio(ffmpeg, path, scratch / f"clip_{index}{path.suffix}")
+        inputs.append(path)
+    return inputs
+
+
 def _mix_audio_tracks(
     ffmpeg: str, tracks: list[Path], dest: Path, duration: float
 ) -> Path | None:
@@ -610,7 +695,8 @@ def mix_compose_soundtrack(
     if dest.resolve() == video.resolve():
         dest = video.with_name(f"{video.stem}_bgm{video.suffix}")
     if has_embedded and upstream:
-        if _mux_overlay_audio(ffmpeg, video, score, dest):
+        voice_only = ctx is not None and _film_has_supplied_music(ctx)
+        if _mux_overlay_audio(ffmpeg, video, score, dest, voice_only=voice_only):
             return dest.resolve()
         return video
     if _mux_bgm(ffmpeg, video, score, dest):
@@ -715,8 +801,16 @@ def _mux_bgm(ffmpeg: str, video: Path, audio: Path, dest: Path) -> bool:
     return True
 
 
-def _mux_overlay_audio(ffmpeg: str, video: Path, audio: Path, dest: Path) -> bool:
-    """Keep in-clip audio and mix an extra speech/music bed on top."""
+def _mux_overlay_audio(
+    ffmpeg: str, video: Path, audio: Path, dest: Path, *, voice_only: bool = False
+) -> bool:
+    """Keep in-clip audio and mix an extra speech/music bed on top.
+
+    ``voice_only`` keeps just the speech band of the in-clip audio: under a supplied
+    score the clips only asked for dialogue, and the model's own music cannot be
+    separated from it.
+    """
+    voice_band = "highpass=f=150,lowpass=f=4000," if voice_only else ""
     muxed = _run_ffmpeg(
         ffmpeg,
         [
@@ -728,7 +822,7 @@ def _mux_overlay_audio(ffmpeg: str, video: Path, audio: Path, dest: Path) -> boo
             "-filter_complex",
             (
                 "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-                "volume=1.0[va];"
+                f"{voice_band}volume=1.0[va];"
                 "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
                 "volume=0.7[oa];"
                 "[va][oa]amix=inputs=2:duration=first:dropout_transition=0[aout]"
@@ -827,7 +921,12 @@ class ComposeNodeHandler:
         dest = handler_io.canvas_output_dir(
             ctx.graph if isinstance(ctx.graph, dict) else None
         ) / f"{stem}.mp4"
-        merged = concatenate_clip_videos(paths, dest)
+        with tempfile.TemporaryDirectory(
+            prefix="designer_compose_", ignore_cleanup_errors=True
+        ) as scratch:
+            merged = concatenate_clip_videos(
+                _clips_for_supplied_music(ctx, paths, Path(scratch)), dest
+            )
         scored = mix_compose_soundtrack(
             merged,
             dest.parent / f"{stem}_bgm.mp4",
